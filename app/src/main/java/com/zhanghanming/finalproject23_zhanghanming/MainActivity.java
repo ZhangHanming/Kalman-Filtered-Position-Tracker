@@ -34,10 +34,17 @@ public class MainActivity extends Activity {
     private LocationManager locationManager;
     private LocationListener locationListener;
     private SensorManager sensorManager;
+
+    // Sensors
     private Sensor accelerationSensor;
-    private Sensor rotationSensor;
+    private Sensor gravitySensor;
+    private Sensor mangeticSensor;
+
+    // Listeners
     private AccelerationSensorListener accelerationListener;
-    private RotationSensorListener rotationListener;
+    private GravitySensorListener gravitySensorListener;
+    private MagneticSensorListener magneticSensorListener;
+
 
     private XYPlot plot;
     private EditableXYSeries originalSeries;
@@ -56,11 +63,6 @@ public class MainActivity extends Activity {
     private volatile double x;
     private volatile double y;
 
-    /* Angle of rotation of phone around z-axis (pointing to the sky)
-    * Assume use hold phone horizontally
-    */
-    private double zSineRotation;
-    private double zCosineRotation;
 
     private double xV;
     private double yV;
@@ -70,6 +72,10 @@ public class MainActivity extends Activity {
     private double prevYA;
     private double xOrigin;
     private double yOrigin;
+
+    private float[] gravity;
+    private float[] geomagnet;
+    private double[] acceleration;
 
     /* Kalman filter to correct GPS readings with acceleration */
     private KalmanFilter KF;
@@ -109,13 +115,15 @@ public class MainActivity extends Activity {
         accelerationSensor = sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION);
         accelerationListener = new AccelerationSensorListener();
 
-        /* Initialize Rotation Vector*/
-        rotationSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR);
-        rotationListener = new RotationSensorListener();
+        gravitySensor = sensorManager.getDefaultSensor(Sensor.TYPE_GRAVITY);
+        gravitySensorListener = new GravitySensorListener();
 
+        mangeticSensor = sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD);
+        magneticSensorListener = new MagneticSensorListener();
 
         sensorManager.registerListener(accelerationListener, accelerationSensor, SensorManager.SENSOR_DELAY_GAME);
-        sensorManager.registerListener(rotationListener, rotationSensor, SensorManager.SENSOR_DELAY_GAME);
+        sensorManager.registerListener(gravitySensorListener, gravitySensor, SensorManager.SENSOR_DELAY_GAME);
+        sensorManager.registerListener(magneticSensorListener, mangeticSensor, SensorManager.SENSOR_DELAY_GAME);
 
         integrateAcceleration();
 
@@ -235,6 +243,11 @@ public class MainActivity extends Activity {
     }
 
     private class AccelerationSensorListener implements SensorEventListener {
+        float[] rotationMatrix = new float[9];
+        float[] inclineMatrix = new float[9];
+        RealVector phoneAcceleration;
+        RealMatrix R;
+
         @Override
         public void onAccuracyChanged(Sensor sensor, int i) {
 
@@ -242,17 +255,68 @@ public class MainActivity extends Activity {
 
         @Override
         public synchronized void onSensorChanged(SensorEvent sensorEvent) {
-            // correct phone rotation
-            xA = sensorEvent.values[0] * zCosineRotation + sensorEvent.values[1] * zSineRotation;
-            yA = sensorEvent.values[1] * zCosineRotation + sensorEvent.values[0] * zSineRotation;
+
+            acceleration = castFloatToDouble(sensorEvent.values);
+
+            phoneAcceleration = MatrixUtils.createRealVector(acceleration);
+
+            SensorManager.getRotationMatrix(rotationMatrix, inclineMatrix, gravity, geomagnet);
+
+            R = MatrixUtils.createRealMatrix(resize3by3(castFloatToDouble(rotationMatrix)));
+
+            phoneAcceleration = R.preMultiply(phoneAcceleration);
+
+            xA = phoneAcceleration.getEntry(0);
+            yA = phoneAcceleration.getEntry(1);
+
+        }
+
+
+        private double[][] resize3by3(double[] input) {
+            if(input.length != 9) return null;
+
+            double[][] result = new double[3][3];
+            int index = 0;
+
+            for (int i = 0; i < 3; i++) {
+                for (int j = 0; j < 3; j++) {
+                    result[i][j] = input[index++];
+                }
+            }
+
+            return result;
+        }
+
+        private double[] castFloatToDouble(float[] input) {
+            double[] result = new double[input.length];
+            int i = 0;
+            for(float f : input) {
+                result[i++] = (double) f;
+            }
+
+            return result;
         }
     }
 
-    private class RotationSensorListener implements SensorEventListener {
+
+
+
+    private class GravitySensorListener implements SensorEventListener {
         @Override
-        public synchronized void onSensorChanged(SensorEvent sensorEvent) {
-            zSineRotation = Math.sin(2*Math.asin(sensorEvent.values[2]));
-            zCosineRotation = Math.sqrt(1 - Math.pow(zSineRotation, 2));
+        public void onAccuracyChanged(Sensor sensor, int i) {
+
+        }
+
+        @Override
+        public void onSensorChanged(SensorEvent sensorEvent) {
+            gravity = sensorEvent.values;
+        }
+    }
+
+    private class MagneticSensorListener implements SensorEventListener {
+        @Override
+        public void onSensorChanged(SensorEvent sensorEvent) {
+            geomagnet = sensorEvent.values;
         }
 
         @Override
@@ -260,6 +324,7 @@ public class MainActivity extends Activity {
 
         }
     }
+
     private class MyProcessModel implements ProcessModel {
 
 
