@@ -12,7 +12,6 @@ import android.location.LocationListener;
 import android.location.LocationManager;
 import android.os.Bundle;
 import android.os.Handler;
-import android.util.Log;
 import android.view.View;
 
 import com.androidplot.xy.EditableXYSeries;
@@ -60,18 +59,18 @@ public class MainActivity extends Activity {
     private double lng;
 
     /* in meters*/
-    private volatile double x;
-    private volatile double y;
+    private double x;
+    private double y;
 
 
     private double xV;
     private double yV;
     private double xA;
     private double yA;
-    private double prevXA;
-    private double prevYA;
     private double xOrigin;
     private double yOrigin;
+
+    private double timestamp = 0;
 
     private float[] gravity;
     private float[] geomagnet;
@@ -86,6 +85,8 @@ public class MainActivity extends Activity {
     /* sampling interval of SENSOR_DELAY_GAME is 20ms */
     private final double sensorSamplingInterval = 0.1;
 
+    private final float nanosecond = 1.0f / 1000000000.0f;
+
     private final Handler handler = new Handler();
 
     @Override
@@ -97,8 +98,6 @@ public class MainActivity extends Activity {
         yV = 0D;
         xA = 0D;
         yA = 0D;
-        prevXA = 0D;
-        prevYA = 0D;
 
 
         /* Initialize GPS Service*/
@@ -125,8 +124,6 @@ public class MainActivity extends Activity {
         sensorManager.registerListener(gravitySensorListener, gravitySensor, SensorManager.SENSOR_DELAY_GAME);
         sensorManager.registerListener(magneticSensorListener, mangeticSensor, SensorManager.SENSOR_DELAY_GAME);
 
-        integrateAcceleration();
-
 
         /* Initialize Graph Plotter*/
         plot = (XYPlot) findViewById(R.id.plot);
@@ -141,23 +138,6 @@ public class MainActivity extends Activity {
 
         correctedSeries = new SimpleXYSeries(correctedXVals, correctedYVals, "corrected reading");
         plot.addSeries(correctedSeries, new LineAndPointFormatter(null, Color.BLUE, null, null));
-    }
-
-    public synchronized void integrateAcceleration() {
-        handler.postDelayed(new Runnable() {
-            @Override
-            public void run() {
-                xV += (prevXA + xA) * sensorSamplingInterval / 2;
-                yV += (prevYA + yA) * sensorSamplingInterval / 2;
-
-                Log.v("data", xV + " " + yV);
-
-                prevXA = xA;
-                prevYA = yA;
-
-                handler.postDelayed(this, (long)(sensorSamplingInterval * 1000));
-            }
-        }, 0);
     }
 
     public void onClick_StartTracking(View view) {
@@ -248,6 +228,8 @@ public class MainActivity extends Activity {
         RealVector phoneAcceleration;
         RealMatrix R;
 
+        double dT;
+
         @Override
         public void onAccuracyChanged(Sensor sensor, int i) {
 
@@ -266,8 +248,25 @@ public class MainActivity extends Activity {
 
             phoneAcceleration = R.preMultiply(phoneAcceleration);
 
+
+
+            if (timestamp != 0) {
+                dT = (sensorEvent.timestamp - timestamp) * nanosecond;
+
+                xV += (xA + phoneAcceleration.getEntry(0)) * dT / 2;
+                yV += (yA + phoneAcceleration.getEntry(1)) * dT / 2;
+
+
+            }
+
+            timestamp = sensorEvent.timestamp;
+
             xA = phoneAcceleration.getEntry(0);
             yA = phoneAcceleration.getEntry(1);
+
+            // reset velocity when phone is still
+            if (Math.abs(xA) < 1.0) xV = 0;
+            if (Math.abs(yA) < 1.0) yV = 0;
 
         }
 
@@ -308,14 +307,15 @@ public class MainActivity extends Activity {
         }
 
         @Override
-        public void onSensorChanged(SensorEvent sensorEvent) {
+        public synchronized void onSensorChanged(SensorEvent sensorEvent) {
             gravity = sensorEvent.values;
+
         }
     }
 
     private class MagneticSensorListener implements SensorEventListener {
         @Override
-        public void onSensorChanged(SensorEvent sensorEvent) {
+        public synchronized void onSensorChanged(SensorEvent sensorEvent) {
             geomagnet = sensorEvent.values;
         }
 
@@ -343,7 +343,7 @@ public class MainActivity extends Activity {
         @Override
         public RealMatrix getProcessNoise() {
             // assume no process noise first
-            double[] processNoise = {0.001, 0.001, 0.1, 0.1};
+            double[] processNoise = {0.001, 0.001, 2, 2};
             return MatrixUtils.createRealDiagonalMatrix(processNoise);
         }
 
@@ -373,8 +373,7 @@ public class MainActivity extends Activity {
 
         @Override
         public RealMatrix getMeasurementNoise() {
-            // TODO replace mesaurementNoise with values
-            double[] measurementNoise = {0.01, 0.01, 0.1299673, 0.1199644};
+            double[] measurementNoise = {0.2, 0.2, 0.1299673, 0.1199644};
             return MatrixUtils.createRealDiagonalMatrix(measurementNoise);
         }
     }
