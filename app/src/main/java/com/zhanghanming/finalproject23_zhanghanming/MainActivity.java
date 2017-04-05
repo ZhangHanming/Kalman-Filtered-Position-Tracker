@@ -12,6 +12,7 @@ import android.location.LocationListener;
 import android.location.LocationManager;
 import android.os.Bundle;
 import android.os.Handler;
+import android.util.Log;
 import android.view.View;
 
 import com.androidplot.xy.EditableXYSeries;
@@ -52,8 +53,8 @@ public class MainActivity extends Activity {
     private double lng;
 
     /* in meters*/
-    private double x;
-    private double y;
+    private volatile double x;
+    private volatile double y;
 
     /* Angle of rotation of phone around z-axis (pointing to the sky)
     * Assume use hold phone horizontally
@@ -65,6 +66,8 @@ public class MainActivity extends Activity {
     private double yV;
     private double xA;
     private double yA;
+    private double prevXA;
+    private double prevYA;
     private double xOrigin;
     private double yOrigin;
 
@@ -75,7 +78,7 @@ public class MainActivity extends Activity {
     private final int interval = 4000;
 
     /* sampling interval of SENSOR_DELAY_GAME is 20ms */
-    private final double sensorSamplingInterval = 0.02;
+    private final double sensorSamplingInterval = 0.1;
 
     private final Handler handler = new Handler();
 
@@ -88,9 +91,9 @@ public class MainActivity extends Activity {
         yV = 0D;
         xA = 0D;
         yA = 0D;
+        prevXA = 0D;
+        prevYA = 0D;
 
-        /* Initialize Kalman Filter */
-        KF = new KalmanFilter(new MyProcessModel(), new MyMeasurementModel());
 
         /* Initialize GPS Service*/
         locationManager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
@@ -114,6 +117,9 @@ public class MainActivity extends Activity {
         sensorManager.registerListener(accelerationListener, accelerationSensor, SensorManager.SENSOR_DELAY_GAME);
         sensorManager.registerListener(rotationListener, rotationSensor, SensorManager.SENSOR_DELAY_GAME);
 
+        integrateAcceleration();
+
+
         /* Initialize Graph Plotter*/
         plot = (XYPlot) findViewById(R.id.plot);
 
@@ -129,27 +135,48 @@ public class MainActivity extends Activity {
         plot.addSeries(correctedSeries, new LineAndPointFormatter(null, Color.BLUE, null, null));
     }
 
-    public void onClick_StartTracking(View view) {
+    public synchronized void integrateAcceleration() {
         handler.postDelayed(new Runnable() {
             @Override
             public void run() {
+                xV += (prevXA + xA) * sensorSamplingInterval / 2;
+                yV += (prevYA + yA) * sensorSamplingInterval / 2;
 
-                  originalXVals.add(x);
-                  originalYVals.add(y);
+                Log.v("data", xV + " " + yV);
 
-                  double[] measuredState = new double[] {x, y, xV, yV};
-                  KF.correct(measuredState);
-                  KF.predict();
+                prevXA = xA;
+                prevYA = yA;
 
-                  double[] stateEstimate = KF.getStateEstimation();
+                handler.postDelayed(this, (long)(sensorSamplingInterval * 1000));
+            }
+        }, 0);
+    }
 
-                  correctedXVals.add(stateEstimate[0]);
-                  correctedYVals.add(stateEstimate[1]);
+    public void onClick_StartTracking(View view) {
 
-                  redrawSeries();
+        /* Initialize Kalman Filter */
+        KF = new KalmanFilter(new MyProcessModel(), new MyMeasurementModel());
+
+        handler.postDelayed(new Runnable() {
+            @Override
+            public synchronized void run() {
+
+              originalXVals.add(x);
+              originalYVals.add(y);
+
+              double[] measuredState = new double[] {x, y, xV, yV};
+              KF.correct(measuredState);
+              KF.predict();
+
+              double[] stateEstimate = KF.getStateEstimation();
+
+              correctedXVals.add(stateEstimate[0]);
+              correctedYVals.add(stateEstimate[1]);
+
+              redrawSeries();
 
 
-                  handler.postDelayed(this, interval);
+              handler.postDelayed(this, interval);
 
             }
         }, 0);
@@ -173,7 +200,7 @@ public class MainActivity extends Activity {
     }
 
     /* uses radian */
-    private void getXY(double lat, double lng) {
+    private synchronized void getXY(double lat, double lng) {
         double deltaLat = lat - yOrigin;
         double deltaLng = lng - xOrigin;
 
@@ -214,11 +241,7 @@ public class MainActivity extends Activity {
         }
 
         @Override
-        public void onSensorChanged(SensorEvent sensorEvent) {
-            // Use Trapezoidal Rule to integrate acceleration
-            xV += (xA + sensorEvent.values[0]) * sensorSamplingInterval / 2;
-            yV += (yA + sensorEvent.values[1]) * sensorSamplingInterval / 2;
-
+        public synchronized void onSensorChanged(SensorEvent sensorEvent) {
             // correct phone rotation
             xA = sensorEvent.values[0] * zCosineRotation + sensorEvent.values[1] * zSineRotation;
             yA = sensorEvent.values[1] * zCosineRotation + sensorEvent.values[0] * zSineRotation;
@@ -227,7 +250,7 @@ public class MainActivity extends Activity {
 
     private class RotationSensorListener implements SensorEventListener {
         @Override
-        public void onSensorChanged(SensorEvent sensorEvent) {
+        public synchronized void onSensorChanged(SensorEvent sensorEvent) {
             zSineRotation = Math.sin(2*Math.asin(sensorEvent.values[2]));
             zCosineRotation = Math.sqrt(1 - Math.pow(zSineRotation, 2));
         }
@@ -248,13 +271,14 @@ public class MainActivity extends Activity {
 
         @Override
         public RealMatrix getInitialErrorCovariance() {
-            return MatrixUtils.createRealIdentityMatrix(4);
+            double[] diagon = {0.01, 0.01, 0.01, 0.01};
+            return MatrixUtils.createRealDiagonalMatrix(diagon);
         }
 
         @Override
         public RealMatrix getProcessNoise() {
             // assume no process noise first
-            double[] processNoise = {0.1, 0.1, 0.1, 0.1};
+            double[] processNoise = {0.001, 0.001, 0.1, 0.1};
             return MatrixUtils.createRealDiagonalMatrix(processNoise);
         }
 
@@ -271,7 +295,7 @@ public class MainActivity extends Activity {
         }
 
         @Override
-        public RealVector getInitialStateEstimate() {
+        public synchronized RealVector getInitialStateEstimate() {
             double[] initialStateEstimate = {x, y, xV, yV};
             return MatrixUtils.createRealVector(initialStateEstimate);
         }
@@ -285,7 +309,7 @@ public class MainActivity extends Activity {
         @Override
         public RealMatrix getMeasurementNoise() {
             // TODO replace mesaurementNoise with values
-            double[] measurementNoise = {0.1, 0.1, 0.1299673, 0.1199644};
+            double[] measurementNoise = {0.01, 0.01, 0.1299673, 0.1199644};
             return MatrixUtils.createRealDiagonalMatrix(measurementNoise);
         }
     }
