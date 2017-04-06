@@ -264,9 +264,9 @@ public class MainActivity extends Activity {
             xA = phoneAcceleration.getEntry(0);
             yA = phoneAcceleration.getEntry(1);
 
-            // reset velocity when phone is still
-            if (Math.abs(xA) < 1.0) xV = 0;
-            if (Math.abs(yA) < 1.0) yV = 0;
+            if (Math.abs(xV) > 2.0) xV *= 0.6;
+            if (Math.abs(yV) > 2.0) yV *= 0.6;
+
 
         }
 
@@ -356,6 +356,7 @@ public class MainActivity extends Activity {
                     {0, 0, 1, 0},
                     {0, 0, 0, 1}
             };
+
             return MatrixUtils.createRealMatrix(stateTransitionMatrixData);
         }
 
@@ -365,6 +366,8 @@ public class MainActivity extends Activity {
             return MatrixUtils.createRealVector(initialStateEstimate);
         }
     }
+
+
     private class MyMeasurementModel implements MeasurementModel {
         @Override
         public RealMatrix getMeasurementMatrix() {
