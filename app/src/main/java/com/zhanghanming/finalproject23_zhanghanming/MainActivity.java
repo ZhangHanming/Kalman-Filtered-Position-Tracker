@@ -12,6 +12,7 @@ import android.location.LocationListener;
 import android.location.LocationManager;
 import android.os.Bundle;
 import android.os.Handler;
+import android.util.Log;
 import android.view.View;
 
 import com.androidplot.xy.EditableXYSeries;
@@ -28,6 +29,8 @@ import org.apache.commons.math3.linear.RealVector;
 
 import java.util.ArrayList;
 import java.util.List;
+
+import static android.os.Build.VERSION_CODES.M;
 
 public class MainActivity extends Activity {
     private LocationManager locationManager;
@@ -227,6 +230,7 @@ public class MainActivity extends Activity {
         float[] inclineMatrix = new float[9];
         RealVector phoneAcceleration;
         RealMatrix R;
+        RealMatrix I;
 
         double dT;
 
@@ -239,33 +243,51 @@ public class MainActivity extends Activity {
         public synchronized void onSensorChanged(SensorEvent sensorEvent) {
 
             acceleration = castFloatToDouble(sensorEvent.values);
+            acceleration[0] += 0.20;
+            acceleration[1] -= 0.08;
 
             phoneAcceleration = MatrixUtils.createRealVector(acceleration);
 
-            SensorManager.getRotationMatrix(rotationMatrix, inclineMatrix, gravity, geomagnet);
+            if(!(gravity == null || geomagnet == null)) {
+                SensorManager.getRotationMatrix(rotationMatrix, inclineMatrix, gravity, geomagnet);
 
-            R = MatrixUtils.createRealMatrix(resize3by3(castFloatToDouble(rotationMatrix)));
+                R = MatrixUtils.createRealMatrix(resize3by3(castFloatToDouble(rotationMatrix)));
+                I = MatrixUtils.createRealMatrix(resize3by3(castFloatToDouble(inclineMatrix)));
 
-            phoneAcceleration = R.preMultiply(phoneAcceleration);
+                phoneAcceleration = R.preMultiply(phoneAcceleration);
+                phoneAcceleration = I.preMultiply(phoneAcceleration);
+
+
+                double newXA = 0.8 * xA + 0.2 * phoneAcceleration.getEntry(0);
+                double newYA = 0.8 * yA + 0.2 * phoneAcceleration.getEntry(1);
+
+
+                if (timestamp != 0) {
+                    dT = (sensorEvent.timestamp - timestamp) * nanosecond;
 
 
 
-            if (timestamp != 0) {
-                dT = (sensorEvent.timestamp - timestamp) * nanosecond;
+                    xV += (xA + newXA) * dT / 2;
+                    yV += (yA + newYA) * dT / 2;
 
-                xV += (xA + phoneAcceleration.getEntry(0)) * dT / 2;
-                yV += (yA + phoneAcceleration.getEntry(1)) * dT / 2;
+
+                }
+
+                timestamp = sensorEvent.timestamp;
+
+                xA = newXA;
+                yA = newYA;
+
+                if (Math.abs(xV) > 2.0) xV *= 0.6;
+                if (Math.abs(yV) > 2.0) yV *= 0.6;
+
+
+//                Log.v("data", xV + " " + yV + " " + dT);
+
 
 
             }
 
-            timestamp = sensorEvent.timestamp;
-
-            xA = phoneAcceleration.getEntry(0);
-            yA = phoneAcceleration.getEntry(1);
-
-            if (Math.abs(xV) > 2.0) xV *= 0.6;
-            if (Math.abs(yV) > 2.0) yV *= 0.6;
 
 
         }
@@ -336,14 +358,14 @@ public class MainActivity extends Activity {
 
         @Override
         public RealMatrix getInitialErrorCovariance() {
-            double[] diagon = {0.01, 0.01, 0.01, 0.01};
+            double[] diagon = {0.01, 0.01, 1, 1};
             return MatrixUtils.createRealDiagonalMatrix(diagon);
         }
 
         @Override
         public RealMatrix getProcessNoise() {
             // assume no process noise first
-            double[] processNoise = {0.001, 0.001, 2, 2};
+            double[] processNoise = {0.001, 0.001, 5, 5};
             return MatrixUtils.createRealDiagonalMatrix(processNoise);
         }
 
@@ -376,7 +398,7 @@ public class MainActivity extends Activity {
 
         @Override
         public RealMatrix getMeasurementNoise() {
-            double[] measurementNoise = {0.2, 0.2, 0.1299673, 0.1199644};
+            double[] measurementNoise = {0.2, 0.2, 0.5, 0.5};
             return MatrixUtils.createRealDiagonalMatrix(measurementNoise);
         }
     }
